@@ -2122,7 +2122,7 @@ class UpdaterGUI:
                 return url, name, False
         
         elif version_type == VERSION_RELEASE:
-            # Latest release
+            # Latest release - use source tag ZIP (same path as snapshot/master)
             try:
                 self.log("Fetching latest release information...")
                 req = Request(f"{GITHUB_API_URL}/releases/latest", headers={'User-Agent': 'Mozilla/5.0'})
@@ -2130,21 +2130,8 @@ class UpdaterGUI:
                     data = json.loads(response.read().decode())
                     tag_name = data.get('tag_name', '')
                     if tag_name:
-                        version = tag_name.split("/", 1)[1] if "/" in tag_name else tag_name
-                        asset_name = f"rotorflight-lua-ethos-suite-{version}-{locale}.zip"
-                        for asset in data.get("assets", []):
-                            if asset.get("name") == asset_name:
-                                self.log(f"✓ Found latest release asset: {asset_name}")
-                                return asset.get("browser_download_url"), tag_name, True
-                        if locale != DEFAULT_LOCALE:
-                            fallback_name = f"rotorflight-lua-ethos-suite-{version}-{DEFAULT_LOCALE}.zip"
-                            for asset in data.get("assets", []):
-                                if asset.get("name") == fallback_name:
-                                    self.log(f"⚠ Locale '{locale}' asset not found; using {DEFAULT_LOCALE}")
-                                    return asset.get("browser_download_url"), tag_name, True
-                        # Fall back to source zip if asset missing
                         url = f"{GITHUB_REPO_URL}/archive/refs/tags/{tag_name}.zip"
-                        self.log(f"✓ Found latest release tag: {tag_name} (no asset)")
+                        self.log(f"✓ Found latest release tag: {tag_name}")
                         return url, tag_name, False
                     else:
                         raise RuntimeError("No tag_name in release data")
@@ -2716,11 +2703,16 @@ class UpdaterGUI:
             self.log("Locating source files...")
 
             if repo_dir is None:
-                # GitHub creates a folder like "rotorflight-lua-ethos-suite-master"
                 extracted_items = os.listdir(extract_dir)
                 if not extracted_items:
                     raise RuntimeError("Extracted archive is empty")
-                repo_dir = os.path.join(extract_dir, extracted_items[0])
+                # Prebuilt asset ZIPs may place content directly at root (no wrapper dir).
+                # GitHub source ZIPs always wrap in a single top-level directory.
+                # Try root-level first; if rfsuite isn't there, strip one level.
+                if self.locate_source_dir(extract_dir):
+                    repo_dir = extract_dir
+                else:
+                    repo_dir = os.path.join(extract_dir, extracted_items[0])
 
             src_dir = self.locate_source_dir(repo_dir)
             if src_dir:
@@ -2739,8 +2731,8 @@ class UpdaterGUI:
             if not self.is_updating:
                 return
             
-            # Step 8: Compile i18n translations (master only) BEFORE copying to radio
-            if version_type == VERSION_MASTER:
+            # Step 8: Compile i18n translations for source ZIPs (master, release tag, snapshot tag)
+            if not is_asset:
                 self.log("Preparing translation compiler (this can take a moment)...")
                 self.set_status("Compiling translations...")
                 self.log("Compiling i18n translations...")
@@ -2816,9 +2808,9 @@ class UpdaterGUI:
             else:
                 self.mark_step_done("Audio")
 
-            # Update main.lua version suffix only for master (release/snapshot assets already stamped)
+            # Update main.lua version suffix for all source ZIP installs
             main_lua_path = os.path.join(dest_dir, "main.lua")
-            if version_type == VERSION_MASTER:
+            if not is_asset:
                 if os.path.isfile(main_lua_path):
                     self.update_main_lua_version(main_lua_path, version_suffix)
                 else:
