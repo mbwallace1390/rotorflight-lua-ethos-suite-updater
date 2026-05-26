@@ -882,7 +882,6 @@ class UpdaterGUI:
     """Main GUI application for updating the radio."""
     
     def __init__(self, root):
-
         self.root = root
         self.root.title("Rotorflight Lua Ethos Suite Updater")
         self.root.geometry("800x800")
@@ -899,10 +898,8 @@ class UpdaterGUI:
         self.setup_ui()
         self._bind_settings_autosave()
         self.radio = RadioInterface(self.log)
-        
         self.version_list = self.fetch_version_list()
         self._update_version_combo()
-        
 
     def _load_user_settings(self):
         """Load saved updater selections (version + locale)."""
@@ -1065,7 +1062,6 @@ class UpdaterGUI:
             text="Language:",
             font=("Arial", 9)
         )
-        #locale_label.pack(side=tk.LEFT, padx=10)
         locale_label.grid(row=0, column=2, padx=5, sticky="W")
 
         self.locale_combo = ttk.Combobox(
@@ -1230,8 +1226,7 @@ class UpdaterGUI:
             text="Download Latest Updater",
             command=lambda: webbrowser.open(UPDATER_INFO_URL)
         )
-        self.update_notice_button.pack(side=tk.RIGHT)
-        
+        self.update_notice_button.pack(side=tk.RIGHT)       
     
     def log(self, message):
         """Add a message to the log."""
@@ -1373,7 +1368,7 @@ class UpdaterGUI:
         rem = self._parse_version_tuple(remote)
         if cur is None or rem is None:
             return current != remote
-        return rem > cur  
+        return rem > cur
 
     def save_log(self):
         """Save the current log to a user-selected file."""
