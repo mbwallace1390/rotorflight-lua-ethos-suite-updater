@@ -355,6 +355,9 @@ def _i18n_load_translations(path):
         return json.load(f)
 
 def _i18n_resolve_key(tree, dotted):
+    if dotted in ("iscompiledcheck", "iscompiledcheck1"):
+        return "true", False
+
     node = tree
     for part in dotted.split("."):
         if not isinstance(node, dict) or part not in node:
@@ -2689,11 +2692,19 @@ class UpdaterGUI:
 
     def derive_version_suffix(self, version_type, version_name):
         """Derive the version suffix to write into main.lua based on workflows."""
+        def normalize_tag_suffix(tag_value):
+            match = re.match(r"^\d+\.\d+\.\d+-(.+)$", tag_value)
+            if match:
+                return match.group(1)
+            if re.match(r"^\d+\.\d+\.\d+$", tag_value):
+                return "release"
+            return tag_value
+
         # Strip common tag prefixes
         if version_name.startswith("release/"):
-            return version_name.split("/", 1)[1]
+            return normalize_tag_suffix(version_name.split("/", 1)[1])
         if version_name.startswith("snapshot/"):
-            return version_name.split("/", 1)[1]
+            return normalize_tag_suffix(version_name.split("/", 1)[1])
         if version_type == VERSION_MASTER:
             if version_name and version_name != "master":
                 return version_name
@@ -2710,16 +2721,27 @@ class UpdaterGUI:
             self.log(f"⚠ Unable to read main.lua for version update: {e}")
             return False
 
-        pattern = re.compile(r'(version\s*=\s*\{[^}]*suffix\s*=\s*")([^"]*)(")', re.S)
-        if not pattern.search(content):
+        version_pattern = re.compile(
+            r'(version\s*=\s*\{[^}]*major\s*=\s*(\d+)[^}]*minor\s*=\s*(\d+)[^}]*revision\s*=\s*(\d+)[^}]*suffix\s*=\s*")([^"]*)(")',
+            re.S
+        )
+        match = version_pattern.search(content)
+        if not match:
             self.log("⚠ Version suffix pattern not found in main.lua")
             return False
 
-        updated = pattern.sub(lambda m: f"{m.group(1)}{version_suffix}{m.group(3)}", content)
+        base_version = f"{match.group(2)}.{match.group(3)}.{match.group(4)}"
+        normalized_suffix = version_suffix
+        if normalized_suffix.startswith(base_version + "-"):
+            normalized_suffix = normalized_suffix[len(base_version) + 1:]
+        elif normalized_suffix == base_version:
+            normalized_suffix = "release"
+
+        updated = version_pattern.sub(lambda m: f"{m.group(1)}{normalized_suffix}{m.group(6)}", content)
         try:
             with open(main_lua_path, "w", encoding="utf-8") as f:
                 f.write(updated)
-            self.log(f"✓ Updated main.lua version suffix to '{version_suffix}'")
+            self.log(f"✓ Updated main.lua version suffix to '{normalized_suffix}'")
             return True
         except Exception as e:
             self.log(f"⚠ Unable to write main.lua version update: {e}")

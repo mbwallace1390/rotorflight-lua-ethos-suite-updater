@@ -3,6 +3,7 @@
 - Version selection split into Releases, Snapshots, and Development channels
 - Development channel now supports master plus recent master commits
 - Archive layout detection now handles historical rfsuite, scripts/rfsuite, src/rfsuite, and package-root ZIP layouts
+- i18n compile sentinel is preserved for localized source installs
 - Bundled logo is used as an immediate fallback before the remote logo refresh
 
 
