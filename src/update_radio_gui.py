@@ -84,6 +84,7 @@ GITHUB_API_URL = "https://api.github.com/repos/rotorflight/rotorflight-lua-ethos
 ETHOS_VID = 0x0483
 ETHOS_PID = 0x5750
 TARGET_NAME = "rfsuite"
+ETHOS_MANIFEST_NAME = "ethos_lua_manifest.json"
 DEFAULT_LOCALE = "en"
 AVAILABLE_LOCALES = ["en", "de", "es", "fr", "it", "nl", "pt-br", "no", "cs", "pl", "he", "zh-cn"]
 DOWNLOAD_TIMEOUT = 120
@@ -1009,10 +1010,15 @@ class UpdaterGUI:
                 self.logo_label.place(relx=1.0, x=0, y=-5, anchor=tk.NE)
                 subtitle_right.place(relx=1.0, x=-6, y=52, anchor=tk.NE)
                 subtitle_right.lift()
-            except Exception:
-                pass
+            except Exception as e:
+                self.logo_load_error = str(e)
 
-        # Async fetch logo to avoid blocking UI
+        # Show the bundled logo immediately; the remote copy can refresh it later.
+        local_logo = APP_DIR / "logo.png"
+        if local_logo.is_file():
+            set_logo_image(local_logo)
+
+        # Async fetch logo to avoid blocking UI.
         def fetch_logo():
             try:
                 _ensure_work_dir()
@@ -1023,10 +1029,13 @@ class UpdaterGUI:
                 with open(tmp_logo, "wb") as f:
                     f.write(logo_bytes)
                 self.root.after(0, lambda: set_logo_image(tmp_logo))
-            except Exception:
-                pass
+            except Exception as e:
+                self.logo_load_error = str(e)
 
-        threading.Thread(target=fetch_logo, daemon=True).start()
+        def start_logo_fetch():
+            threading.Thread(target=fetch_logo, daemon=True).start()
+
+        self.root.after(100, start_logo_fetch)
         
         # Version selection frame
         version_frame = ttk.LabelFrame(self.root, text="Version Selection", padding="10")
@@ -1781,7 +1790,7 @@ class UpdaterGUI:
         except Exception:
             return True
 
-    def _build_rel_file_map(self, root_dir):
+    def _build_rel_file_map(self, root_dir, ignore_package_manifest=False):
         files = {}
         if not os.path.isdir(root_dir):
             return files
@@ -1792,6 +1801,8 @@ class UpdaterGUI:
                 if self._is_ignored_path(full, root_dir):
                     continue
                 rel = os.path.relpath(full, root_dir)
+                if ignore_package_manifest and rel.replace("\\", "/").lower() == ETHOS_MANIFEST_NAME:
+                    continue
                 files[rel] = full
         return files
 
@@ -1825,7 +1836,7 @@ class UpdaterGUI:
         if not os.path.isdir(dst):
             return True
 
-        src_files = self._build_rel_file_map(src)
+        src_files = self._build_rel_file_map(src, ignore_package_manifest=True)
         dst_files = self._build_rel_file_map(dst)
         stale = [rel for rel in dst_files.keys() if rel not in src_files]
         total_stale = len(stale)
@@ -1993,7 +2004,7 @@ class UpdaterGUI:
     def copy_tree_with_progress(self, src, dst, use_phase=False):
         """Copy only changed files (size/mtime fast path with MD5 fallback)."""
         os.makedirs(dst, exist_ok=True)
-        src_files = self._build_rel_file_map(src)
+        src_files = self._build_rel_file_map(src, ignore_package_manifest=True)
         total_files = len(src_files)
         self.log(f"  Total files to verify: {total_files}")
 
@@ -2425,15 +2436,169 @@ class UpdaterGUI:
 
     def locate_source_dir(self, extract_dir):
         """Locate the rfsuite source directory in extracted content."""
-        possible_paths = [
-            os.path.join(extract_dir, "scripts", TARGET_NAME),  # prebuilt asset layout
-            os.path.join(extract_dir, "src", TARGET_NAME),      # repo layout
-            os.path.join(extract_dir, TARGET_NAME),             # direct
-        ]
-        for path in possible_paths:
-            if os.path.isdir(path):
-                return path
+        layout = self.detect_source_layout(extract_dir)
+        if layout:
+            return layout["source_dir"]
         return None
+
+    def _is_suite_source_dir(self, path):
+        """Return true when a directory looks like the installable app root."""
+        if not os.path.isdir(path):
+            return False
+        try:
+            names = {name.lower() for name in os.listdir(path)}
+        except OSError:
+            return False
+        return "main.lua" in names or "main.luac" in names
+
+    def _source_layout_score(self, path, search_dir):
+        """Score likely source roots. Higher scores are better."""
+        try:
+            names = {name.lower() for name in os.listdir(path)}
+        except OSError:
+            names = set()
+
+        rel = os.path.relpath(path, search_dir).replace("\\", "/")
+        rel = "" if rel == "." else rel.strip("/")
+        parts = [p for p in rel.split("/") if p]
+        score = 100
+
+        if parts[-2:] == ["scripts", TARGET_NAME]:
+            score += 45
+        elif parts[-2:] == ["src", TARGET_NAME]:
+            score += 40
+        elif parts and parts[-1] == TARGET_NAME:
+            score += 35
+        elif not parts:
+            score += 25
+
+        if ETHOS_MANIFEST_NAME in names:
+            score += 20
+        for expected in ("app", "lib", "tasks", "i18n"):
+            if expected in names:
+                score += 2
+        return score
+
+    def _infer_repo_dir_from_source(self, source_dir, search_dir):
+        """Infer the repo/package root that owns source_dir."""
+        rel = os.path.relpath(source_dir, search_dir).replace("\\", "/")
+        rel = "" if rel == "." else rel.strip("/")
+        parts = [p for p in rel.split("/") if p]
+
+        if parts[-2:] in (["src", TARGET_NAME], ["scripts", TARGET_NAME]):
+            return os.path.dirname(os.path.dirname(source_dir))
+        if parts and parts[-1] == TARGET_NAME:
+            return os.path.dirname(source_dir)
+        return source_dir
+
+    def _describe_source_layout(self, source_dir, search_dir):
+        rel = os.path.relpath(source_dir, search_dir).replace("\\", "/")
+        rel = "" if rel == "." else rel.strip("/")
+        parts = [p for p in rel.split("/") if p]
+
+        if parts[-2:] == ["scripts", TARGET_NAME]:
+            return "scripts/rfsuite"
+        if parts[-2:] == ["src", TARGET_NAME]:
+            return "src/rfsuite"
+        if parts and parts[-1] == TARGET_NAME:
+            return "rfsuite"
+        if os.path.isfile(os.path.join(source_dir, ETHOS_MANIFEST_NAME)):
+            return "ETHOS package root"
+        return "app root"
+
+    def _valid_install_folder(self, folder):
+        return bool(re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", folder or ""))
+
+    def _install_folder_from_manifest(self, source_dir, repo_dir):
+        for base_dir in (source_dir, repo_dir):
+            if not base_dir:
+                continue
+            manifest_path = os.path.join(base_dir, ETHOS_MANIFEST_NAME)
+            if not os.path.isfile(manifest_path):
+                continue
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+                folder = manifest.get("folder")
+                if self._valid_install_folder(folder):
+                    return folder
+                if folder:
+                    self.log(f"⚠ Ignoring invalid package folder in {ETHOS_MANIFEST_NAME}: {folder}")
+            except Exception as e:
+                self.log(f"⚠ Could not read {ETHOS_MANIFEST_NAME}: {e}")
+        return None
+
+    def _install_folder_from_main_lua(self, source_dir):
+        for name in ("main.lua", "main.luac"):
+            main_path = os.path.join(source_dir, name)
+            if not os.path.isfile(main_path):
+                continue
+            if name.endswith(".luac"):
+                continue
+            try:
+                with open(main_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read(128 * 1024)
+                match = re.search(r'\bbaseDir\s*=\s*"([^"]+)"', content)
+                if match and self._valid_install_folder(match.group(1)):
+                    return match.group(1)
+            except Exception as e:
+                self.log(f"⚠ Could not read main.lua baseDir: {e}")
+        return None
+
+    def determine_install_folder(self, source_dir, repo_dir=None):
+        """Determine the folder under scripts/ where the suite should be installed."""
+        folder = self._install_folder_from_manifest(source_dir, repo_dir)
+        if folder:
+            return folder
+
+        folder = self._install_folder_from_main_lua(source_dir)
+        if folder:
+            return folder
+
+        return TARGET_NAME
+
+    def detect_source_layout(self, search_dir):
+        """Locate installable suite files and infer their owning root directory."""
+        if not search_dir or not os.path.isdir(search_dir):
+            return None
+
+        candidates = {}
+
+        def add_candidate(path):
+            path = os.path.normpath(path)
+            if self._is_suite_source_dir(path):
+                candidates[path] = max(
+                    candidates.get(path, 0),
+                    self._source_layout_score(path, search_dir)
+                )
+
+        for rel in (
+            os.path.join("scripts", TARGET_NAME),
+            os.path.join("src", TARGET_NAME),
+            TARGET_NAME,
+            "",
+        ):
+            add_candidate(os.path.join(search_dir, rel))
+
+        for root, dirs, files in os.walk(search_dir):
+            dirs[:] = [
+                d for d in dirs
+                if d not in (".git", "__pycache__", "._pycache__") and not d.startswith("._")
+            ]
+            lower_files = {name.lower() for name in files}
+            if "main.lua" in lower_files or "main.luac" in lower_files:
+                add_candidate(root)
+
+        if not candidates:
+            return None
+
+        source_dir = sorted(candidates.items(), key=lambda item: (-item[1], len(item[0])))[0][0]
+        repo_dir = self._infer_repo_dir_from_source(source_dir, search_dir)
+        return {
+            "source_dir": source_dir,
+            "repo_dir": repo_dir,
+            "layout": self._describe_source_layout(source_dir, search_dir),
+        }
 
     def get_master_commit_suffix(self):
         """Fetch the latest master commit SHA and return commit-<sha7>."""
@@ -2748,26 +2913,36 @@ class UpdaterGUI:
                 extracted_items = os.listdir(extract_dir)
                 if not extracted_items:
                     raise RuntimeError("Extracted archive is empty")
-                # Prebuilt asset ZIPs may place content directly at root (no wrapper dir).
-                # GitHub source ZIPs always wrap in a single top-level directory.
-                # Try root-level first; if rfsuite isn't there, strip one level.
-                if self.locate_source_dir(extract_dir):
-                    repo_dir = extract_dir
-                else:
-                    repo_dir = os.path.join(extract_dir, extracted_items[0])
+                source_layout = self.detect_source_layout(extract_dir)
+                if not source_layout:
+                    # GitHub source ZIPs should normally be found recursively, but keep
+                    # a one-wrapper fallback for odd archives with a single top folder.
+                    top_dirs = [
+                        os.path.join(extract_dir, item)
+                        for item in extracted_items
+                        if os.path.isdir(os.path.join(extract_dir, item))
+                    ]
+                    if len(top_dirs) == 1:
+                        source_layout = self.detect_source_layout(top_dirs[0])
+                if source_layout:
+                    repo_dir = source_layout["repo_dir"]
 
-            src_dir = self.locate_source_dir(repo_dir)
+            source_layout = self.detect_source_layout(repo_dir)
+            src_dir = source_layout["source_dir"] if source_layout else None
             if src_dir:
-                self.log(f"✓ Found source: {os.path.relpath(src_dir, repo_dir)}")
+                rel_source = os.path.relpath(src_dir, repo_dir)
+                self.log(f"✓ Found source: {rel_source} ({source_layout['layout']})")
             
             if not src_dir:
+                search_root = repo_dir or extract_dir
                 self.log(f"✗ Source directory not found in any of these locations:")
                 for path in [
-                    os.path.join(repo_dir, "scripts", TARGET_NAME),
-                    os.path.join(repo_dir, "src", TARGET_NAME),
-                    os.path.join(repo_dir, TARGET_NAME),
+                    search_root,
+                    os.path.join(search_root, "scripts", TARGET_NAME),
+                    os.path.join(search_root, "src", TARGET_NAME),
+                    os.path.join(search_root, TARGET_NAME),
                 ]:
-                    self.log(f"  - {os.path.relpath(path, repo_dir)}")
+                    self.log(f"  - {os.path.relpath(path, search_root)}")
                 raise RuntimeError(f"Could not find {TARGET_NAME} in extracted archive")
             
             if not self.is_updating:
@@ -2816,7 +2991,9 @@ class UpdaterGUI:
                 return
 
             # Step 9: Copy files to radio
-            dest_dir = os.path.join(scripts_dir, TARGET_NAME)
+            install_folder = self.determine_install_folder(src_dir, repo_dir)
+            dest_dir = os.path.join(scripts_dir, install_folder)
+            self.log(f"Installing to scripts/{install_folder}")
             self.log("Syncing files to radio...")
 
             # Single visible phase: Copy (includes stale prune + changed-file copy)
