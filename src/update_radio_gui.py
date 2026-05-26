@@ -915,7 +915,9 @@ class UpdaterGUI:
             version = str(data.get("version", "")).strip()
             locale = str(data.get("locale", "")).strip()
 
-            if version in (VERSION_RELEASE, VERSION_RC, VERSION_SNAPSHOT, VERSION_MASTER):
+            if version == VERSION_RC:
+                version = VERSION_RELEASE
+            if version in (VERSION_RELEASE, VERSION_SNAPSHOT, VERSION_MASTER):
                 self.selected_version.set(version)
             if locale in AVAILABLE_LOCALES:
                 self.selected_locale.set(locale)
@@ -1038,32 +1040,36 @@ class UpdaterGUI:
         self.root.after(100, start_logo_fetch)
         
         # Version selection frame
-        version_frame = ttk.LabelFrame(self.root, text="Version Selection", padding="10")
+        version_frame = ttk.LabelFrame(self.root, text="Version Selection", padding=(14, 12))
         version_frame.pack(fill=tk.X, padx=10, pady=5)
+        version_frame.columnconfigure(0, minsize=190)
+        version_frame.columnconfigure(1, minsize=330)
+        version_frame.columnconfigure(2, minsize=90)
+        version_frame.columnconfigure(3, minsize=90)
+        version_frame.columnconfigure(4, weight=1)
         
         version_filter_label = ttk.Label(
             version_frame,
-            text="Select build types to include:",
+            text="Build channel:",
             font=("Arial", 9)
         )
-        version_filter_label.grid(row=0, column=0, padx=5, sticky="W")
+        version_filter_label.grid(row=0, column=0, padx=(0, 10), pady=(2, 8), sticky="E")
         
         version_filter_combo_keys = {
             VERSION_RELEASE:0,
-            VERSION_RC:1,
-            VERSION_SNAPSHOT:2,
-            VERSION_MASTER:3,
+            VERSION_SNAPSHOT:1,
+            VERSION_MASTER:2,
         }
 
         self.version_filter_combo = ttk.Combobox(
             version_frame,
-            width=30,
+            width=34,
             state="readonly",
         )
-        self.version_filter_combo['values']=['Releases', 'Releases and release candidates', 'All releases and snapshots', 'Master (development)']     
+        self.version_filter_combo['values']=['Releases', 'Snapshots', 'Development']     
         self.version_filter_combo.bind('<<ComboboxSelected>>', lambda _e: self._update_selected_version())
         self.version_filter_combo.current(version_filter_combo_keys.get(self.selected_version.get(), 0))
-        self.version_filter_combo.grid(row=0, column=1, padx=5, sticky="W")
+        self.version_filter_combo.grid(row=0, column=1, padx=(0, 14), pady=(2, 8), sticky="W")
         
         # Language selection (within version frame)
         locale_label = ttk.Label(
@@ -1071,7 +1077,7 @@ class UpdaterGUI:
             text="Language:",
             font=("Arial", 9)
         )
-        locale_label.grid(row=0, column=2, padx=5, sticky="W")
+        locale_label.grid(row=0, column=2, padx=(0, 8), pady=(2, 8), sticky="W")
 
         self.locale_combo = ttk.Combobox(
             version_frame,
@@ -1081,22 +1087,22 @@ class UpdaterGUI:
             width=8
         )
         self.locale_combo.bind('<<ComboboxSelected>>', lambda _e: self._update_selected_version())
-        self.locale_combo.grid(row=0, column=3, padx=5, sticky="W")
+        self.locale_combo.grid(row=0, column=3, padx=(0, 0), pady=(2, 8), sticky="W")
         
         version_label = ttk.Label(
             version_frame,
             text="Select version to install:",
             font=("Arial", 9)
         )
-        version_label.grid(row=1, column=0, padx=5, sticky="W")
+        version_label.grid(row=1, column=0, padx=(0, 10), pady=(4, 2), sticky="E")
         
         self.version_combo = ttk.Combobox(
             version_frame,
-            width=30,
+            width=34,
             state="readonly",
         )
         self.version_combo['values']=[]
-        self.version_combo.grid(row=1, column=1, padx=5, sticky="W")
+        self.version_combo.grid(row=1, column=1, padx=(0, 14), pady=(4, 2), sticky="W")
 
         # Status frame
         status_frame = ttk.LabelFrame(self.root, text="Status", padding="10")
@@ -1592,19 +1598,19 @@ class UpdaterGUI:
         if selected == 0:
             self.selected_version.set(VERSION_RELEASE)
         elif selected == 1:
-            self.selected_version.set(VERSION_RC)
-        elif selected == 2:
             self.selected_version.set(VERSION_SNAPSHOT)
-        elif selected == 3:
+        elif selected == 2:
             self.selected_version.set(VERSION_MASTER)
         self._update_version_combo()
             
     def _update_version_combo(self):
         self.version_combo['values'] = []
         combo_values = []
+        locale = self.selected_locale.get()
+        version_type = self.selected_version.get()
 
-        for display_name, version_data in self.version_list[self.selected_locale.get()].items():
-            if version_data["version_stage"] <= self.version_filter_combo.current():
+        for display_name, version_data in self.version_list.get(locale, {}).items():
+            if version_data.get("version_type") == version_type:
                 combo_values.append(display_name)
         
         if len(combo_values) == 0:
@@ -2128,67 +2134,134 @@ class UpdaterGUI:
         return False
        
     def fetch_version_list(self):
-        import json
         version_list = {}
+        release_assets_by_tag = {}
+        seen_tags = set()
+
+        def ensure_locale(locale):
+            if locale in version_list:
+                return
+            asset_url = f"{GITHUB_REPO_URL}/archive/refs/heads/master.zip"
+            version_list[locale] = {
+                "Master": {
+                    "display_name": "Master",
+                    "tag_name": "master",
+                    "locale": locale,
+                    "download_url": asset_url,
+                    "is_asset": False,
+                    "version_type": VERSION_MASTER,
+                }
+            }
+
+        def fetch_json(url):
+            req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with self.urlopen_insecure(req, timeout=DOWNLOAD_TIMEOUT) as response:
+                return json.loads(response.read().decode())
+
+        def add_tag(tag_name, assets=None):
+            if not tag_name or tag_name in seen_tags:
+                return
+            if tag_name.startswith("release/"):
+                version_type = VERSION_RELEASE
+                display_prefix = "Release"
+            elif tag_name.startswith("snapshot/"):
+                version_type = VERSION_SNAPSHOT
+                display_prefix = "Snapshot"
+            else:
+                return
+
+            seen_tags.add(tag_name)
+            version = tag_name.split("/", 1)[1]
+            assets = assets or release_assets_by_tag.get(tag_name, [])
+
+            for locale in AVAILABLE_LOCALES:
+                ensure_locale(locale)
+                display_name = f"{display_prefix} {version}"
+                asset_name = f"rotorflight-lua-ethos-suite-{version}-{locale}.zip"
+                asset_url = self._get_url_by_name(asset_name, assets)
+                entry_locale = locale
+                entry_display = display_name
+
+                if asset_url:
+                    self.log(f"✓ Found asset: {asset_name}")
+                    is_asset = True
+                else:
+                    is_asset = False
+                    if locale != DEFAULT_LOCALE:
+                        fallback_name = f"rotorflight-lua-ethos-suite-{version}-{DEFAULT_LOCALE}.zip"
+                        asset_url = self._get_url_by_name(fallback_name, assets)
+                        if asset_url:
+                            self.log(f"⚠ Locale '{locale}' asset not found for {version}; using {DEFAULT_LOCALE}")
+                            entry_locale = DEFAULT_LOCALE
+                            entry_display = f"{display_name} ({DEFAULT_LOCALE})"
+                            is_asset = True
+
+                if not asset_url:
+                    asset_url = f"{GITHUB_REPO_URL}/archive/refs/tags/{tag_name}.zip"
+                    entry_locale = locale if locale == DEFAULT_LOCALE else DEFAULT_LOCALE
+                    if locale != DEFAULT_LOCALE:
+                        entry_display = f"{display_name} ({DEFAULT_LOCALE})"
+                    self.log(f"✓ Found tag: {tag_name} (source ZIP fallback)")
+
+                version_list[locale][entry_display] = {
+                    "display_name": entry_display,
+                    "tag_name": tag_name,
+                    "locale": entry_locale,
+                    "download_url": asset_url,
+                    "is_asset": is_asset,
+                    "version_type": version_type,
+                }
+
+        def add_development_commits():
+            try:
+                commits = fetch_json(f"{GITHUB_API_URL}/commits?sha=master&per_page=20")
+                if not isinstance(commits, list):
+                    return
+                for commit in commits:
+                    sha = commit.get("sha", "")
+                    if not sha:
+                        continue
+                    sha7 = sha[:7]
+                    message = (commit.get("commit", {}).get("message") or "").splitlines()[0].strip()
+                    if len(message) > 48:
+                        message = message[:45] + "..."
+                    display_name = sha7
+                    if message:
+                        display_name += f" - {message}"
+                    for locale in AVAILABLE_LOCALES:
+                        ensure_locale(locale)
+                        version_list[locale][display_name] = {
+                            "display_name": display_name,
+                            "tag_name": f"commit-{sha7}",
+                            "locale": locale,
+                            "download_url": f"{GITHUB_REPO_URL}/archive/{sha}.zip",
+                            "is_asset": False,
+                            "version_type": VERSION_MASTER,
+                        }
+            except Exception as e:
+                self.log(f"⚠ Failed to fetch recent development commits: {e}")
+
+        for locale in AVAILABLE_LOCALES:
+            ensure_locale(locale)
         
         try:
-            self.log("Fetching release list...")
-            req = Request(f"{GITHUB_API_URL}/releases", headers={'User-Agent': 'Mozilla/5.0'})
-            with self.urlopen_insecure(req, timeout=DOWNLOAD_TIMEOUT) as response:
-                data = json.loads(response.read().decode())
-                for release in data:
-                    tag_name = release.get('tag_name', '')
-                    assets = release.get("assets", [])
-                    
-                    if tag_name:
-                        version = tag_name.split("/", 1)[1] if "/" in tag_name else tag_name
-                        
-                        version_stage = 3
-                        display_name = version
-                        if "snapshot/" in tag_name:
-                            version_stage = 2
-                            display_name = "Snapshot " + version
-                        if "-RC" in tag_name:
-                            version_stage = 1
-                            display_name = "Release candidate " + version
-                        elif "release/" in tag_name:
-                            version_stage = 0
-                            display_name = "Release " + version
+            self.log("Fetching release and snapshot tags...")
+            releases = fetch_json(f"{GITHUB_API_URL}/releases?per_page=100")
+            for release in releases:
+                tag_name = release.get("tag_name", "")
+                if tag_name:
+                    release_assets_by_tag[tag_name] = release.get("assets", [])
+                    add_tag(tag_name, release_assets_by_tag[tag_name])
 
-                        for locale in AVAILABLE_LOCALES:
-                            if locale not in version_list:
-                                version_list[locale] = {}
-                                asset_url = f"{GITHUB_REPO_URL}/archive/refs/heads/master.zip"
-                                version_list[locale]["Master"] =  {"display_name":"Master", "tag_name":"master", "locale":locale, "download_url":asset_url, "is_asset":False, "version_stage":3 }
+            tags = fetch_json(f"{GITHUB_API_URL}/tags?per_page=100")
+            for tag in tags:
+                add_tag(tag.get("name", ""))
 
-                            asset_name = f"rotorflight-lua-ethos-suite-{version}-{locale}.zip"
-                            asset_url = self._get_url_by_name(asset_name, assets)
-                            if asset_url:
-                                self.log(f"✓ Found asset: {asset_name} {version} {locale}")
-                                version_list[locale][display_name] = {"display_name":display_name, "tag_name":tag_name, "locale":locale, "download_url":asset_url, "is_asset":True, "version_stage":version_stage }
-                                
-                            if not asset_url and locale != DEFAULT_LOCALE:
-                                fallback_name = f"rotorflight-lua-ethos-suite-{version}-{DEFAULT_LOCALE}.zip"
-                                asset_url = self._get_url_by_name(fallback_name, assets)
-                                if asset_url:
-                                    self.log(f"⚠ Locale '{locale}' asset not found for {version}; using {DEFAULT_LOCALE}")
-                                    version_list[locale][display_name + f" ({DEFAULT_LOCALE})"] = {"display_name":display_name + f" ({DEFAULT_LOCALE})", "tag_name":tag_name, "locale":DEFAULT_LOCALE, "download_url":asset_url, "is_asset":True, "version_stage":version_stage }
-                                    
-                            if not asset_url:
-                                asset_url = f"{GITHUB_REPO_URL}/archive/refs/tags/{tag_name}.zip"
-                                self.log(f"✓ Found tag: {version} {locale} {DEFAULT_LOCALE} (no asset)")
-                                if locale != DEFAULT_LOCALE:
-                                    version_list[locale][display_name + f" ({DEFAULT_LOCALE})"] = { "display_name":display_name + f" ({DEFAULT_LOCALE})", "tag_name":tag_name, "locale":DEFAULT_LOCALE, "download_url":asset_url, "is_asset":False, "version_stage":version_stage }
-                                else:
-                                    version_list[locale][display_name] =  { "display_name":display_name, "tag_name":tag_name, "locale":DEFAULT_LOCALE, "download_url":asset_url, "is_asset":False, "version_stage":version_stage }
+            add_development_commits()
             
         except Exception as e:
             self.log(f"⚠ Failed to fetch version list: {e}")
             self.log("  Falling back to master branch")
-            url = f"{GITHUB_REPO_URL}/archive/refs/heads/master.zip"
-            for locale in AVAILABLE_LOCALES:
-                version_list[locale] = {}
-                version_list[locale]["Master"] = { "display_name":"Master", "tag_name":"master", "locale":DEFAULT_LOCALE, "download_url":url, "is_asset":False, "version_stage":3 }
 
         return version_list
     
@@ -2622,6 +2695,8 @@ class UpdaterGUI:
         if version_name.startswith("snapshot/"):
             return version_name.split("/", 1)[1]
         if version_type == VERSION_MASTER:
+            if version_name and version_name != "master":
+                return version_name
             return self.get_master_commit_suffix()
         # Fallback: use a sanitized first token
         return (version_name.split()[0] if version_name else "master")
@@ -2820,21 +2895,23 @@ class UpdaterGUI:
             self.set_current_step("Download")
 
             version_type = self.selected_version.get()
-            version_name = "master" if version_type == VERSION_MASTER else ""
+            download_url, version_name, is_asset = self.get_download_url_and_name()
+            if not download_url:
+                raise RuntimeError("No download URL available")
             version_suffix = self.derive_version_suffix(version_type, version_name)
             locale = self.selected_locale.get() or DEFAULT_LOCALE
             self.log(f"Selected version: {version_name or version_type}")
             self.log(f"Selected locale: {locale}")
             self.log(f"Version suffix for main.lua: {version_suffix}")
-            is_asset = False
             
             _ensure_work_dir()
             temp_dir = tempfile.mkdtemp(prefix="rfsuite-update-", dir=str(WORK_DIR))
             zip_path = None
 
-            # For master, prefer sparse checkout to avoid full repo download
+            # For current master, prefer sparse checkout to avoid full repo download.
+            # Specific development commits are downloaded as source ZIPs by commit SHA.
             repo_dir = None
-            if version_type == VERSION_MASTER:
+            if version_type == VERSION_MASTER and version_name == "master":
                 self.set_status("Fetching master via git...")
                 self.update_progress(0, "Fetching master via git...")
                 self.log("Git sparse checkout: src/rfsuite/, .vscode/scripts/, bin/sound-generator/soundpack/")
@@ -2846,14 +2923,6 @@ class UpdaterGUI:
                     self.mark_step_done("Download")
 
             if repo_dir is None:
-                # Get download URL based on selected version (release/snapshot or master fallback)
-                download_url, version_name, is_asset = self.get_download_url_and_name()
-                if not download_url:
-                    raise RuntimeError("No download URL available")
-                if version_type != VERSION_MASTER:
-                    version_suffix = self.derive_version_suffix(version_type, version_name)
-                    self.log(f"Selected version: {version_name}")
-                    self.log(f"Version suffix for main.lua: {version_suffix}")
                 self.log(f"Downloading from: {download_url}")
                 try:
                     zip_path = self._download_zip_with_cache(download_url)
