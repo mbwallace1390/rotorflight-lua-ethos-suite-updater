@@ -2159,10 +2159,9 @@ class UpdaterGUI:
                             if not asset_url and locale != DEFAULT_LOCALE:
                                 fallback_name = f"rotorflight-lua-ethos-suite-{version}-{DEFAULT_LOCALE}.zip"
                                 asset_url = self._get_url_by_name(fallback_name, assets)
-                                
                                 if asset_url:
                                     self.log(f"⚠ Locale '{locale}' asset not found for {version}; using {DEFAULT_LOCALE}")
-                                    version_list[locale]["display_name":display_name + f" ({DEFAULT_LOCALE})"] = {"display_name":display_name + f" ({DEFAULT_LOCALE})", "tag_name":tag_name, "locale":DEFAULT_LOCALE, "download_url":asset_url, "is_asset":True, "version_stage":version_stage }
+                                    version_list[locale][display_name + f" ({DEFAULT_LOCALE})"] = {"display_name":display_name + f" ({DEFAULT_LOCALE})", "tag_name":tag_name, "locale":DEFAULT_LOCALE, "download_url":asset_url, "is_asset":True, "version_stage":version_stage }
                                     
                             if not asset_url:
                                 asset_url = f"{GITHUB_REPO_URL}/archive/refs/tags/{tag_name}.zip"
