@@ -2148,7 +2148,7 @@ class UpdaterGUI:
                             if locale not in version_list:
                                 version_list[locale] = {}
                                 asset_url = f"{GITHUB_REPO_URL}/archive/refs/heads/master.zip"
-                                version_list[locale]["Master"] =  {"display_name":"Master", "tag_name":"Master", "locale":locale, "download_url":asset_url, "is_asset":False, "version_stage":3 }
+                                version_list[locale]["Master"] =  {"display_name":"Master", "tag_name":"master", "locale":locale, "download_url":asset_url, "is_asset":False, "version_stage":3 }
 
                             asset_name = f"rotorflight-lua-ethos-suite-{version}-{locale}.zip"
                             asset_url = self._get_url_by_name(asset_name, assets)
@@ -2177,7 +2177,7 @@ class UpdaterGUI:
             url = f"{GITHUB_REPO_URL}/archive/refs/heads/master.zip"
             for locale in AVAILABLE_LOCALES:
                 version_list[locale] = {}
-                version_list[locale]["Master"] = { "display_name":"Master", "tag_name":"Master", "locale":DEFAULT_LOCALE, "download_url":url, "is_asset":False, "version_stage":3 }
+                version_list[locale]["Master"] = { "display_name":"Master", "tag_name":"master", "locale":DEFAULT_LOCALE, "download_url":url, "is_asset":False, "version_stage":3 }
 
         return version_list
     
