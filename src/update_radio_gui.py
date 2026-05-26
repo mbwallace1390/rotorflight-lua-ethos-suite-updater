@@ -84,6 +84,7 @@ GITHUB_API_URL = "https://api.github.com/repos/rotorflight/rotorflight-lua-ethos
 ETHOS_VID = 0x0483
 ETHOS_PID = 0x5750
 TARGET_NAME = "rfsuite"
+ETHOS_MANIFEST_NAME = "ethos_lua_manifest.json"
 DEFAULT_LOCALE = "en"
 AVAILABLE_LOCALES = ["en", "de", "es", "fr", "it", "nl", "pt-br", "no", "cs", "pl", "he", "zh-cn"]
 DOWNLOAD_TIMEOUT = 120
@@ -215,6 +216,7 @@ def _clear_stale_lock_file():
 
 # Version types
 VERSION_RELEASE = "release"
+VERSION_RC = "rc"
 VERSION_SNAPSHOT = "snapshot"
 VERSION_MASTER = "master"
 
@@ -353,6 +355,9 @@ def _i18n_load_translations(path):
         return json.load(f)
 
 def _i18n_resolve_key(tree, dotted):
+    if dotted in ("iscompiledcheck", "iscompiledcheck1"):
+        return "true", False
+
     node = tree
     for part in dotted.split("."):
         if not isinstance(node, dict) or part not in node:
@@ -893,10 +898,12 @@ class UpdaterGUI:
         self.chkdsk_attempted = False
         self.settings_path = UPDATER_SETTINGS_FILE
         self._load_user_settings()
-        
+
         self.setup_ui()
         self._bind_settings_autosave()
         self.radio = RadioInterface(self.log)
+        self.version_list = self.fetch_version_list()
+        self._update_version_combo()
 
     def _load_user_settings(self):
         """Load saved updater selections (version + locale)."""
@@ -911,6 +918,8 @@ class UpdaterGUI:
             version = str(data.get("version", "")).strip()
             locale = str(data.get("locale", "")).strip()
 
+            if version == VERSION_RC:
+                version = VERSION_RELEASE
             if version in (VERSION_RELEASE, VERSION_SNAPSHOT, VERSION_MASTER):
                 self.selected_version.set(version)
             if locale in AVAILABLE_LOCALES:
@@ -1006,10 +1015,15 @@ class UpdaterGUI:
                 self.logo_label.place(relx=1.0, x=0, y=-5, anchor=tk.NE)
                 subtitle_right.place(relx=1.0, x=-6, y=52, anchor=tk.NE)
                 subtitle_right.lift()
-            except Exception:
-                pass
+            except Exception as e:
+                self.logo_load_error = str(e)
 
-        # Async fetch logo to avoid blocking UI
+        # Show the bundled logo immediately; the remote copy can refresh it later.
+        local_logo = APP_DIR / "logo.png"
+        if local_logo.is_file():
+            set_logo_image(local_logo)
+
+        # Async fetch logo to avoid blocking UI.
         def fetch_logo():
             try:
                 _ensure_work_dir()
@@ -1020,59 +1034,78 @@ class UpdaterGUI:
                 with open(tmp_logo, "wb") as f:
                     f.write(logo_bytes)
                 self.root.after(0, lambda: set_logo_image(tmp_logo))
-            except Exception:
-                pass
+            except Exception as e:
+                self.logo_load_error = str(e)
 
-        threading.Thread(target=fetch_logo, daemon=True).start()
+        def start_logo_fetch():
+            threading.Thread(target=fetch_logo, daemon=True).start()
+
+        self.root.after(100, start_logo_fetch)
         
         # Version selection frame
-        version_frame = ttk.LabelFrame(self.root, text="Version Selection", padding="10")
+        version_frame = ttk.LabelFrame(self.root, text="Version Selection", padding=(14, 12))
         version_frame.pack(fill=tk.X, padx=10, pady=5)
+        version_frame.columnconfigure(0, minsize=190)
+        version_frame.columnconfigure(1, minsize=330)
+        version_frame.columnconfigure(2, minsize=90)
+        version_frame.columnconfigure(3, minsize=90)
+        version_frame.columnconfigure(4, weight=1)
         
-        version_label = ttk.Label(
+        version_filter_label = ttk.Label(
             version_frame,
-            text="Select version to install:",
+            text="Build channel:",
             font=("Arial", 9)
         )
-        version_label.pack(side=tk.LEFT, padx=5)
+        version_filter_label.grid(row=0, column=0, padx=(0, 10), pady=(2, 8), sticky="E")
         
-        # Radio buttons for version selection
-        ttk.Radiobutton(
+        version_filter_combo_keys = {
+            VERSION_RELEASE:0,
+            VERSION_SNAPSHOT:1,
+            VERSION_MASTER:2,
+        }
+
+        self.version_filter_combo = ttk.Combobox(
             version_frame,
-            text="Release (Stable)",
-            variable=self.selected_version,
-            value=VERSION_RELEASE
-        ).pack(side=tk.LEFT, padx=5)
+            width=34,
+            state="readonly",
+        )
+        self.version_filter_combo['values']=['Releases', 'Snapshots', 'Development']     
+        self.version_filter_combo.bind('<<ComboboxSelected>>', lambda _e: self._update_selected_version())
+        self.version_filter_combo.current(version_filter_combo_keys.get(self.selected_version.get(), 0))
+        self.version_filter_combo.grid(row=0, column=1, padx=(0, 14), pady=(2, 8), sticky="W")
         
-        ttk.Radiobutton(
-            version_frame,
-            text="Snapshot (Pre-release)",
-            variable=self.selected_version,
-            value=VERSION_SNAPSHOT
-        ).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Radiobutton(
-            version_frame,
-            text="Master (Latest)",
-            variable=self.selected_version,
-            value=VERSION_MASTER
-        ).pack(side=tk.LEFT, padx=5)
         # Language selection (within version frame)
         locale_label = ttk.Label(
             version_frame,
             text="Language:",
             font=("Arial", 9)
         )
-        locale_label.pack(side=tk.LEFT, padx=10)
+        locale_label.grid(row=0, column=2, padx=(0, 8), pady=(2, 8), sticky="W")
 
-        locale_combo = ttk.Combobox(
+        self.locale_combo = ttk.Combobox(
             version_frame,
             textvariable=self.selected_locale,
             values=AVAILABLE_LOCALES,
             state="readonly",
             width=8
         )
-        locale_combo.pack(side=tk.LEFT, padx=5)
+        self.locale_combo.bind('<<ComboboxSelected>>', lambda _e: self._update_selected_version())
+        self.locale_combo.grid(row=0, column=3, padx=(0, 0), pady=(2, 8), sticky="W")
+        
+        version_label = ttk.Label(
+            version_frame,
+            text="Select version to install:",
+            font=("Arial", 9)
+        )
+        version_label.grid(row=1, column=0, padx=(0, 10), pady=(4, 2), sticky="E")
+        
+        self.version_combo = ttk.Combobox(
+            version_frame,
+            width=34,
+            state="readonly",
+        )
+        self.version_combo['values']=[]
+        self.version_combo.grid(row=1, column=1, padx=(0, 14), pady=(4, 2), sticky="W")
 
         # Status frame
         status_frame = ttk.LabelFrame(self.root, text="Status", padding="10")
@@ -1562,6 +1595,32 @@ class UpdaterGUI:
         """Update progress label."""
         self.progress_label.config(text=text)
         self.root.update_idletasks()
+            
+    def _update_selected_version(self):
+        selected = self.version_filter_combo.current() 
+        if selected == 0:
+            self.selected_version.set(VERSION_RELEASE)
+        elif selected == 1:
+            self.selected_version.set(VERSION_SNAPSHOT)
+        elif selected == 2:
+            self.selected_version.set(VERSION_MASTER)
+        self._update_version_combo()
+            
+    def _update_version_combo(self):
+        self.version_combo['values'] = []
+        combo_values = []
+        locale = self.selected_locale.get()
+        version_type = self.selected_version.get()
+
+        for display_name, version_data in self.version_list.get(locale, {}).items():
+            if version_data.get("version_type") == version_type:
+                combo_values.append(display_name)
+        
+        if len(combo_values) == 0:
+            combo_values.append("No valid versions found")
+
+        self.version_combo["values"] = combo_values
+        self.version_combo.current(0)
 
     def _draw_segment_bar(self):
         if not hasattr(self, "segment_bar"):
@@ -1740,7 +1799,7 @@ class UpdaterGUI:
         except Exception:
             return True
 
-    def _build_rel_file_map(self, root_dir):
+    def _build_rel_file_map(self, root_dir, ignore_package_manifest=False):
         files = {}
         if not os.path.isdir(root_dir):
             return files
@@ -1751,6 +1810,8 @@ class UpdaterGUI:
                 if self._is_ignored_path(full, root_dir):
                     continue
                 rel = os.path.relpath(full, root_dir)
+                if ignore_package_manifest and rel.replace("\\", "/").lower() == ETHOS_MANIFEST_NAME:
+                    continue
                 files[rel] = full
         return files
 
@@ -1784,7 +1845,7 @@ class UpdaterGUI:
         if not os.path.isdir(dst):
             return True
 
-        src_files = self._build_rel_file_map(src)
+        src_files = self._build_rel_file_map(src, ignore_package_manifest=True)
         dst_files = self._build_rel_file_map(dst)
         stale = [rel for rel in dst_files.keys() if rel not in src_files]
         total_stale = len(stale)
@@ -1952,7 +2013,7 @@ class UpdaterGUI:
     def copy_tree_with_progress(self, src, dst, use_phase=False):
         """Copy only changed files (size/mtime fast path with MD5 fallback)."""
         os.makedirs(dst, exist_ok=True)
-        src_files = self._build_rel_file_map(src)
+        src_files = self._build_rel_file_map(src, ignore_package_manifest=True)
         total_files = len(src_files)
         self.log(f"  Total files to verify: {total_files}")
 
@@ -2068,84 +2129,152 @@ class UpdaterGUI:
             pass
         
         return True
+        
+    def _get_url_by_name(self, asset_name, assets):
+        for asset in assets:
+            if asset.get("name") == asset_name:
+                return asset.get("browser_download_url")
+        return False
+       
+    def fetch_version_list(self):
+        version_list = {}
+        release_assets_by_tag = {}
+        seen_tags = set()
+
+        def ensure_locale(locale):
+            if locale in version_list:
+                return
+            asset_url = f"{GITHUB_REPO_URL}/archive/refs/heads/master.zip"
+            version_list[locale] = {
+                "Master": {
+                    "display_name": "Master",
+                    "tag_name": "master",
+                    "locale": locale,
+                    "download_url": asset_url,
+                    "is_asset": False,
+                    "version_type": VERSION_MASTER,
+                }
+            }
+
+        def fetch_json(url):
+            req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with self.urlopen_insecure(req, timeout=DOWNLOAD_TIMEOUT) as response:
+                return json.loads(response.read().decode())
+
+        def add_tag(tag_name, assets=None):
+            if not tag_name or tag_name in seen_tags:
+                return
+            if tag_name.startswith("release/"):
+                version_type = VERSION_RELEASE
+                display_prefix = "Release"
+            elif tag_name.startswith("snapshot/"):
+                version_type = VERSION_SNAPSHOT
+                display_prefix = "Snapshot"
+            else:
+                return
+
+            seen_tags.add(tag_name)
+            version = tag_name.split("/", 1)[1]
+            assets = assets or release_assets_by_tag.get(tag_name, [])
+
+            for locale in AVAILABLE_LOCALES:
+                ensure_locale(locale)
+                display_name = f"{display_prefix} {version}"
+                asset_name = f"rotorflight-lua-ethos-suite-{version}-{locale}.zip"
+                asset_url = self._get_url_by_name(asset_name, assets)
+                entry_locale = locale
+                entry_display = display_name
+
+                if asset_url:
+                    self.log(f"✓ Found asset: {asset_name}")
+                    is_asset = True
+                else:
+                    is_asset = False
+                    if locale != DEFAULT_LOCALE:
+                        fallback_name = f"rotorflight-lua-ethos-suite-{version}-{DEFAULT_LOCALE}.zip"
+                        asset_url = self._get_url_by_name(fallback_name, assets)
+                        if asset_url:
+                            self.log(f"⚠ Locale '{locale}' asset not found for {version}; using {DEFAULT_LOCALE}")
+                            entry_locale = DEFAULT_LOCALE
+                            entry_display = f"{display_name} ({DEFAULT_LOCALE})"
+                            is_asset = True
+
+                if not asset_url:
+                    asset_url = f"{GITHUB_REPO_URL}/archive/refs/tags/{tag_name}.zip"
+                    entry_locale = locale if locale == DEFAULT_LOCALE else DEFAULT_LOCALE
+                    if locale != DEFAULT_LOCALE:
+                        entry_display = f"{display_name} ({DEFAULT_LOCALE})"
+                    self.log(f"✓ Found tag: {tag_name} (source ZIP fallback)")
+
+                version_list[locale][entry_display] = {
+                    "display_name": entry_display,
+                    "tag_name": tag_name,
+                    "locale": entry_locale,
+                    "download_url": asset_url,
+                    "is_asset": is_asset,
+                    "version_type": version_type,
+                }
+
+        def add_development_commits():
+            try:
+                commits = fetch_json(f"{GITHUB_API_URL}/commits?sha=master&per_page=20")
+                if not isinstance(commits, list):
+                    return
+                for commit in commits:
+                    sha = commit.get("sha", "")
+                    if not sha:
+                        continue
+                    sha7 = sha[:7]
+                    message = (commit.get("commit", {}).get("message") or "").splitlines()[0].strip()
+                    if len(message) > 48:
+                        message = message[:45] + "..."
+                    display_name = sha7
+                    if message:
+                        display_name += f" - {message}"
+                    for locale in AVAILABLE_LOCALES:
+                        ensure_locale(locale)
+                        version_list[locale][display_name] = {
+                            "display_name": display_name,
+                            "tag_name": f"commit-{sha7}",
+                            "locale": locale,
+                            "download_url": f"{GITHUB_REPO_URL}/archive/{sha}.zip",
+                            "is_asset": False,
+                            "version_type": VERSION_MASTER,
+                        }
+            except Exception as e:
+                self.log(f"⚠ Failed to fetch recent development commits: {e}")
+
+        for locale in AVAILABLE_LOCALES:
+            ensure_locale(locale)
+        
+        try:
+            self.log("Fetching release and snapshot tags...")
+            releases = fetch_json(f"{GITHUB_API_URL}/releases?per_page=100")
+            for release in releases:
+                tag_name = release.get("tag_name", "")
+                if tag_name:
+                    release_assets_by_tag[tag_name] = release.get("assets", [])
+                    add_tag(tag_name, release_assets_by_tag[tag_name])
+
+            tags = fetch_json(f"{GITHUB_API_URL}/tags?per_page=100")
+            for tag in tags:
+                add_tag(tag.get("name", ""))
+
+            add_development_commits()
+            
+        except Exception as e:
+            self.log(f"⚠ Failed to fetch version list: {e}")
+            self.log("  Falling back to master branch")
+
+        return version_list
     
-    def get_download_url_and_name(self, locale):
+    def get_download_url_and_name(self):
         """Get the download URL and version name based on selected version."""
-        import json
-        
-        version_type = self.selected_version.get()
-        
-        if version_type == VERSION_MASTER:
-            # Master branch
-            url = f"{GITHUB_REPO_URL}/archive/refs/heads/master.zip"
-            name = "master"
-            return url, name, False
-        
-        elif version_type == VERSION_SNAPSHOT:
-            # Snapshot branch - try to get pre-release from GitHub API
-            try:
-                self.log("Fetching latest pre-release information...")
-                req = Request(f"{GITHUB_API_URL}/releases", headers={'User-Agent': 'Mozilla/5.0'})
-                with self.urlopen_insecure(req, timeout=DOWNLOAD_TIMEOUT) as response:
-                    data = json.loads(response.read().decode())
-                    # Find first pre-release
-                    for release in data:
-                        if release.get('prerelease', False):
-                            tag_name = release.get('tag_name', '')
-                            if tag_name:
-                                version = tag_name.split("/", 1)[1] if "/" in tag_name else tag_name
-                                asset_name = f"rotorflight-lua-ethos-suite-{version}-{locale}.zip"
-                                for asset in release.get("assets", []):
-                                    if asset.get("name") == asset_name:
-                                        self.log(f"✓ Found latest pre-release asset: {asset_name}")
-                                        return asset.get("browser_download_url"), tag_name, True
-                                if locale != DEFAULT_LOCALE:
-                                    fallback_name = f"rotorflight-lua-ethos-suite-{version}-{DEFAULT_LOCALE}.zip"
-                                    for asset in release.get("assets", []):
-                                        if asset.get("name") == fallback_name:
-                                            self.log(f"⚠ Locale '{locale}' asset not found; using {DEFAULT_LOCALE}")
-                                            return asset.get("browser_download_url"), tag_name, True
-                                # Fall back to source zip if asset missing
-                                url = f"{GITHUB_REPO_URL}/archive/refs/tags/{tag_name}.zip"
-                                self.log(f"✓ Found latest pre-release tag: {tag_name} (no asset)")
-                                return url, tag_name, False
-                    # No pre-release found, fall back to master
-                    self.log("⚠ No pre-release found, using master branch")
-                    url = f"{GITHUB_REPO_URL}/archive/refs/heads/master.zip"
-                    name = "master (no snapshot)"
-                    return url, name, False
-            except Exception as e:
-                self.log(f"⚠ Failed to fetch pre-release info: {e}")
-                self.log("  Falling back to master branch")
-                url = f"{GITHUB_REPO_URL}/archive/refs/heads/master.zip"
-                name = "master (fallback)"
-                return url, name, False
-        
-        elif version_type == VERSION_RELEASE:
-            # Latest release - use source tag ZIP (same path as snapshot/master)
-            try:
-                self.log("Fetching latest release information...")
-                req = Request(f"{GITHUB_API_URL}/releases/latest", headers={'User-Agent': 'Mozilla/5.0'})
-                with self.urlopen_insecure(req, timeout=DOWNLOAD_TIMEOUT) as response:
-                    data = json.loads(response.read().decode())
-                    tag_name = data.get('tag_name', '')
-                    if tag_name:
-                        url = f"{GITHUB_REPO_URL}/archive/refs/tags/{tag_name}.zip"
-                        self.log(f"✓ Found latest release tag: {tag_name}")
-                        return url, tag_name, False
-                    else:
-                        raise RuntimeError("No tag_name in release data")
-            except Exception as e:
-                self.log(f"⚠ Failed to fetch release info: {e}")
-                self.log("  Falling back to master branch")
-                url = f"{GITHUB_REPO_URL}/archive/refs/heads/master.zip"
-                name = "master (fallback)"
-                return url, name, False
-        
-        # Default fallback
-        url = f"{GITHUB_REPO_URL}/archive/refs/heads/master.zip"
-        name = "master"
-        return url, name, False
+        selected = self.version_list.get(self.locale_combo.get(), {}).get(self.version_combo.get())
+        if selected is not None:
+            return selected["download_url"], selected["tag_name"], selected["is_asset"]
+        else:
+            return self.version_list[DEFAULT_LOCALE]["Master"]["download_url"], self.version_list[DEFAULT_LOCALE]["Master"]["tag_name"], self.version_list[DEFAULT_LOCALE]["Master"]["is_asset"]
 
     def is_git_available(self):
         """Check if git is available."""
@@ -2383,15 +2512,169 @@ class UpdaterGUI:
 
     def locate_source_dir(self, extract_dir):
         """Locate the rfsuite source directory in extracted content."""
-        possible_paths = [
-            os.path.join(extract_dir, "scripts", TARGET_NAME),  # prebuilt asset layout
-            os.path.join(extract_dir, "src", TARGET_NAME),      # repo layout
-            os.path.join(extract_dir, TARGET_NAME),             # direct
-        ]
-        for path in possible_paths:
-            if os.path.isdir(path):
-                return path
+        layout = self.detect_source_layout(extract_dir)
+        if layout:
+            return layout["source_dir"]
         return None
+
+    def _is_suite_source_dir(self, path):
+        """Return true when a directory looks like the installable app root."""
+        if not os.path.isdir(path):
+            return False
+        try:
+            names = {name.lower() for name in os.listdir(path)}
+        except OSError:
+            return False
+        return "main.lua" in names or "main.luac" in names
+
+    def _source_layout_score(self, path, search_dir):
+        """Score likely source roots. Higher scores are better."""
+        try:
+            names = {name.lower() for name in os.listdir(path)}
+        except OSError:
+            names = set()
+
+        rel = os.path.relpath(path, search_dir).replace("\\", "/")
+        rel = "" if rel == "." else rel.strip("/")
+        parts = [p for p in rel.split("/") if p]
+        score = 100
+
+        if parts[-2:] == ["scripts", TARGET_NAME]:
+            score += 45
+        elif parts[-2:] == ["src", TARGET_NAME]:
+            score += 40
+        elif parts and parts[-1] == TARGET_NAME:
+            score += 35
+        elif not parts:
+            score += 25
+
+        if ETHOS_MANIFEST_NAME in names:
+            score += 20
+        for expected in ("app", "lib", "tasks", "i18n"):
+            if expected in names:
+                score += 2
+        return score
+
+    def _infer_repo_dir_from_source(self, source_dir, search_dir):
+        """Infer the repo/package root that owns source_dir."""
+        rel = os.path.relpath(source_dir, search_dir).replace("\\", "/")
+        rel = "" if rel == "." else rel.strip("/")
+        parts = [p for p in rel.split("/") if p]
+
+        if parts[-2:] in (["src", TARGET_NAME], ["scripts", TARGET_NAME]):
+            return os.path.dirname(os.path.dirname(source_dir))
+        if parts and parts[-1] == TARGET_NAME:
+            return os.path.dirname(source_dir)
+        return source_dir
+
+    def _describe_source_layout(self, source_dir, search_dir):
+        rel = os.path.relpath(source_dir, search_dir).replace("\\", "/")
+        rel = "" if rel == "." else rel.strip("/")
+        parts = [p for p in rel.split("/") if p]
+
+        if parts[-2:] == ["scripts", TARGET_NAME]:
+            return "scripts/rfsuite"
+        if parts[-2:] == ["src", TARGET_NAME]:
+            return "src/rfsuite"
+        if parts and parts[-1] == TARGET_NAME:
+            return "rfsuite"
+        if os.path.isfile(os.path.join(source_dir, ETHOS_MANIFEST_NAME)):
+            return "ETHOS package root"
+        return "app root"
+
+    def _valid_install_folder(self, folder):
+        return bool(re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", folder or ""))
+
+    def _install_folder_from_manifest(self, source_dir, repo_dir):
+        for base_dir in (source_dir, repo_dir):
+            if not base_dir:
+                continue
+            manifest_path = os.path.join(base_dir, ETHOS_MANIFEST_NAME)
+            if not os.path.isfile(manifest_path):
+                continue
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+                folder = manifest.get("folder")
+                if self._valid_install_folder(folder):
+                    return folder
+                if folder:
+                    self.log(f"⚠ Ignoring invalid package folder in {ETHOS_MANIFEST_NAME}: {folder}")
+            except Exception as e:
+                self.log(f"⚠ Could not read {ETHOS_MANIFEST_NAME}: {e}")
+        return None
+
+    def _install_folder_from_main_lua(self, source_dir):
+        for name in ("main.lua", "main.luac"):
+            main_path = os.path.join(source_dir, name)
+            if not os.path.isfile(main_path):
+                continue
+            if name.endswith(".luac"):
+                continue
+            try:
+                with open(main_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read(128 * 1024)
+                match = re.search(r'\bbaseDir\s*=\s*"([^"]+)"', content)
+                if match and self._valid_install_folder(match.group(1)):
+                    return match.group(1)
+            except Exception as e:
+                self.log(f"⚠ Could not read main.lua baseDir: {e}")
+        return None
+
+    def determine_install_folder(self, source_dir, repo_dir=None):
+        """Determine the folder under scripts/ where the suite should be installed."""
+        folder = self._install_folder_from_manifest(source_dir, repo_dir)
+        if folder:
+            return folder
+
+        folder = self._install_folder_from_main_lua(source_dir)
+        if folder:
+            return folder
+
+        return TARGET_NAME
+
+    def detect_source_layout(self, search_dir):
+        """Locate installable suite files and infer their owning root directory."""
+        if not search_dir or not os.path.isdir(search_dir):
+            return None
+
+        candidates = {}
+
+        def add_candidate(path):
+            path = os.path.normpath(path)
+            if self._is_suite_source_dir(path):
+                candidates[path] = max(
+                    candidates.get(path, 0),
+                    self._source_layout_score(path, search_dir)
+                )
+
+        for rel in (
+            os.path.join("scripts", TARGET_NAME),
+            os.path.join("src", TARGET_NAME),
+            TARGET_NAME,
+            "",
+        ):
+            add_candidate(os.path.join(search_dir, rel))
+
+        for root, dirs, files in os.walk(search_dir):
+            dirs[:] = [
+                d for d in dirs
+                if d not in (".git", "__pycache__", "._pycache__") and not d.startswith("._")
+            ]
+            lower_files = {name.lower() for name in files}
+            if "main.lua" in lower_files or "main.luac" in lower_files:
+                add_candidate(root)
+
+        if not candidates:
+            return None
+
+        source_dir = sorted(candidates.items(), key=lambda item: (-item[1], len(item[0])))[0][0]
+        repo_dir = self._infer_repo_dir_from_source(source_dir, search_dir)
+        return {
+            "source_dir": source_dir,
+            "repo_dir": repo_dir,
+            "layout": self._describe_source_layout(source_dir, search_dir),
+        }
 
     def get_master_commit_suffix(self):
         """Fetch the latest master commit SHA and return commit-<sha7>."""
@@ -2409,12 +2692,22 @@ class UpdaterGUI:
 
     def derive_version_suffix(self, version_type, version_name):
         """Derive the version suffix to write into main.lua based on workflows."""
+        def normalize_tag_suffix(tag_value):
+            match = re.match(r"^\d+\.\d+\.\d+-(.+)$", tag_value)
+            if match:
+                return match.group(1)
+            if re.match(r"^\d+\.\d+\.\d+$", tag_value):
+                return "release"
+            return tag_value
+
         # Strip common tag prefixes
         if version_name.startswith("release/"):
-            return version_name.split("/", 1)[1]
+            return normalize_tag_suffix(version_name.split("/", 1)[1])
         if version_name.startswith("snapshot/"):
-            return version_name.split("/", 1)[1]
+            return normalize_tag_suffix(version_name.split("/", 1)[1])
         if version_type == VERSION_MASTER:
+            if version_name and version_name != "master":
+                return version_name
             return self.get_master_commit_suffix()
         # Fallback: use a sanitized first token
         return (version_name.split()[0] if version_name else "master")
@@ -2428,16 +2721,27 @@ class UpdaterGUI:
             self.log(f"⚠ Unable to read main.lua for version update: {e}")
             return False
 
-        pattern = re.compile(r'(version\s*=\s*\{[^}]*suffix\s*=\s*")([^"]*)(")', re.S)
-        if not pattern.search(content):
+        version_pattern = re.compile(
+            r'(version\s*=\s*\{[^}]*major\s*=\s*(\d+)[^}]*minor\s*=\s*(\d+)[^}]*revision\s*=\s*(\d+)[^}]*suffix\s*=\s*")([^"]*)(")',
+            re.S
+        )
+        match = version_pattern.search(content)
+        if not match:
             self.log("⚠ Version suffix pattern not found in main.lua")
             return False
 
-        updated = pattern.sub(lambda m: f"{m.group(1)}{version_suffix}{m.group(3)}", content)
+        base_version = f"{match.group(2)}.{match.group(3)}.{match.group(4)}"
+        normalized_suffix = version_suffix
+        if normalized_suffix.startswith(base_version + "-"):
+            normalized_suffix = normalized_suffix[len(base_version) + 1:]
+        elif normalized_suffix == base_version:
+            normalized_suffix = "release"
+
+        updated = version_pattern.sub(lambda m: f"{m.group(1)}{normalized_suffix}{m.group(6)}", content)
         try:
             with open(main_lua_path, "w", encoding="utf-8") as f:
                 f.write(updated)
-            self.log(f"✓ Updated main.lua version suffix to '{version_suffix}'")
+            self.log(f"✓ Updated main.lua version suffix to '{normalized_suffix}'")
             return True
         except Exception as e:
             self.log(f"⚠ Unable to write main.lua version update: {e}")
@@ -2613,21 +2917,23 @@ class UpdaterGUI:
             self.set_current_step("Download")
 
             version_type = self.selected_version.get()
-            version_name = "master" if version_type == VERSION_MASTER else ""
+            download_url, version_name, is_asset = self.get_download_url_and_name()
+            if not download_url:
+                raise RuntimeError("No download URL available")
             version_suffix = self.derive_version_suffix(version_type, version_name)
             locale = self.selected_locale.get() or DEFAULT_LOCALE
             self.log(f"Selected version: {version_name or version_type}")
             self.log(f"Selected locale: {locale}")
             self.log(f"Version suffix for main.lua: {version_suffix}")
-            is_asset = False
             
             _ensure_work_dir()
             temp_dir = tempfile.mkdtemp(prefix="rfsuite-update-", dir=str(WORK_DIR))
             zip_path = None
 
-            # For master, prefer sparse checkout to avoid full repo download
+            # For current master, prefer sparse checkout to avoid full repo download.
+            # Specific development commits are downloaded as source ZIPs by commit SHA.
             repo_dir = None
-            if version_type == VERSION_MASTER:
+            if version_type == VERSION_MASTER and version_name == "master":
                 self.set_status("Fetching master via git...")
                 self.update_progress(0, "Fetching master via git...")
                 self.log("Git sparse checkout: src/rfsuite/, .vscode/scripts/, bin/sound-generator/soundpack/")
@@ -2639,14 +2945,6 @@ class UpdaterGUI:
                     self.mark_step_done("Download")
 
             if repo_dir is None:
-                # Get download URL based on selected version (release/snapshot or master fallback)
-                download_url, version_name, is_asset = self.get_download_url_and_name(locale)
-                if not download_url:
-                    raise RuntimeError("No download URL available")
-                if version_type != VERSION_MASTER:
-                    version_suffix = self.derive_version_suffix(version_type, version_name)
-                    self.log(f"Selected version: {version_name}")
-                    self.log(f"Version suffix for main.lua: {version_suffix}")
                 self.log(f"Downloading from: {download_url}")
                 try:
                     zip_path = self._download_zip_with_cache(download_url)
@@ -2706,26 +3004,36 @@ class UpdaterGUI:
                 extracted_items = os.listdir(extract_dir)
                 if not extracted_items:
                     raise RuntimeError("Extracted archive is empty")
-                # Prebuilt asset ZIPs may place content directly at root (no wrapper dir).
-                # GitHub source ZIPs always wrap in a single top-level directory.
-                # Try root-level first; if rfsuite isn't there, strip one level.
-                if self.locate_source_dir(extract_dir):
-                    repo_dir = extract_dir
-                else:
-                    repo_dir = os.path.join(extract_dir, extracted_items[0])
+                source_layout = self.detect_source_layout(extract_dir)
+                if not source_layout:
+                    # GitHub source ZIPs should normally be found recursively, but keep
+                    # a one-wrapper fallback for odd archives with a single top folder.
+                    top_dirs = [
+                        os.path.join(extract_dir, item)
+                        for item in extracted_items
+                        if os.path.isdir(os.path.join(extract_dir, item))
+                    ]
+                    if len(top_dirs) == 1:
+                        source_layout = self.detect_source_layout(top_dirs[0])
+                if source_layout:
+                    repo_dir = source_layout["repo_dir"]
 
-            src_dir = self.locate_source_dir(repo_dir)
+            source_layout = self.detect_source_layout(repo_dir)
+            src_dir = source_layout["source_dir"] if source_layout else None
             if src_dir:
-                self.log(f"✓ Found source: {os.path.relpath(src_dir, repo_dir)}")
+                rel_source = os.path.relpath(src_dir, repo_dir)
+                self.log(f"✓ Found source: {rel_source} ({source_layout['layout']})")
             
             if not src_dir:
+                search_root = repo_dir or extract_dir
                 self.log(f"✗ Source directory not found in any of these locations:")
                 for path in [
-                    os.path.join(repo_dir, "scripts", TARGET_NAME),
-                    os.path.join(repo_dir, "src", TARGET_NAME),
-                    os.path.join(repo_dir, TARGET_NAME),
+                    search_root,
+                    os.path.join(search_root, "scripts", TARGET_NAME),
+                    os.path.join(search_root, "src", TARGET_NAME),
+                    os.path.join(search_root, TARGET_NAME),
                 ]:
-                    self.log(f"  - {os.path.relpath(path, repo_dir)}")
+                    self.log(f"  - {os.path.relpath(path, search_root)}")
                 raise RuntimeError(f"Could not find {TARGET_NAME} in extracted archive")
             
             if not self.is_updating:
@@ -2774,7 +3082,9 @@ class UpdaterGUI:
                 return
 
             # Step 9: Copy files to radio
-            dest_dir = os.path.join(scripts_dir, TARGET_NAME)
+            install_folder = self.determine_install_folder(src_dir, repo_dir)
+            dest_dir = os.path.join(scripts_dir, install_folder)
+            self.log(f"Installing to scripts/{install_folder}")
             self.log("Syncing files to radio...")
 
             # Single visible phase: Copy (includes stale prune + changed-file copy)
