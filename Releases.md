@@ -1,3 +1,11 @@
+## 1.0.9
+
+- Version selection split into Releases, Snapshots, and Development channels
+- Development channel now supports master plus recent master commits
+- Archive layout detection now handles historical rfsuite, scripts/rfsuite, src/rfsuite, and package-root ZIP layouts
+- Bundled logo is used as an immediate fallback before the remote logo refresh
+
+
 ## 1.0.8
 
 - Release and snapshot now download from source tag ZIP, following the same process as master
