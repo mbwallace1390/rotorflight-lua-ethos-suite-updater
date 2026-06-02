@@ -1,3 +1,8 @@
+## 1.0.10
+
+- Updater executable and macOS app names are now unique to the Ethos Suite updater
+
+
 ## 1.0.9
 
 - Version selection split into Releases, Snapshots, and Development channels

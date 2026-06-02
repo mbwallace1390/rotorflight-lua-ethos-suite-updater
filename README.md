@@ -17,8 +17,8 @@ https://github.com/rotorflight/rotorflight-lua-ethos-suite-updater/releases
 ```
 
 Asset names (when present):
-- Windows: `rfsuite-updater-<version>-windows.zip`
-- macOS: `rfsuite-updater-<version>-macos.zip`
+- Windows: `rotorflight-lua-ethos-suite-updater-<version>-windows-<arch>.zip`
+- macOS: `rotorflight-lua-ethos-suite-updater-<version>-macos-<arch>.zip`
 - Linux: `updater-ubuntu-latest` (workflow artifacts; not yet attached to releases)
 
 If a release does not include updater assets, the binaries were not rebuilt for that tag. In that case, use the most recent release **that includes** the updater artifacts or build locally (see below).
@@ -35,7 +35,7 @@ Compilation requirements:
 2. Python 3.x on PATH.
 3. PyInstaller installed: `pip install pyinstaller`
 4. From `src`, run: `make.cmd`
-5. Output EXE: `src/update_radio_gui.exe`
+5. Output EXE: `rotorflight-lua-ethos-suite-updater.exe`
 
 Optional build inputs:
 
