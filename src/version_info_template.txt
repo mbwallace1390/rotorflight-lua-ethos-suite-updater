@@ -16,12 +16,12 @@ VSVersionInfo(
         '040904B0',
         [
           StringStruct('CompanyName', 'Rotorflight'),
-          StringStruct('FileDescription', 'Rotorflight Updater'),
+          StringStruct('FileDescription', 'Rotorflight Lua Ethos Suite Updater'),
           StringStruct('FileVersion', '{FILEVER_STR}'),
-          StringStruct('InternalName', 'update_radio_gui'),
+          StringStruct('InternalName', 'rotorflight-lua-ethos-suite-updater'),
           StringStruct('LegalCopyright', 'Copyright (C) 2025 Rotorflight Project'),
-          StringStruct('OriginalFilename', 'update_radio_gui.exe'),
-          StringStruct('ProductName', 'Rotorflight Updater'),
+          StringStruct('OriginalFilename', 'rotorflight-lua-ethos-suite-updater.exe'),
+          StringStruct('ProductName', 'Rotorflight Lua Ethos Suite Updater'),
           StringStruct('ProductVersion', '{PRODVER_STR}')
         ]
       )
