@@ -8,7 +8,19 @@ def install_worker_lifecycle(core):
     previous_init = gui.__init__
     previous_process = gui.update_process
     previous_read_version = gui.read_main_lua_version
+    previous_controls = gui._set_update_controls_running
     previous_commit = getattr(gui, "_commit_install_transaction", None)
+
+    def set_update_controls(self, running):
+        thread = getattr(self, "update_thread", None)
+        if (
+            not running
+            and thread is not None
+            and thread.is_alive()
+            and threading.current_thread() is thread
+        ):
+            return None
+        return previous_controls(self, running)
 
     def worker_done(self):
         thread = getattr(self, "update_thread", None)
@@ -89,6 +101,7 @@ def install_worker_lifecycle(core):
 
     gui._worker_done = worker_done
     gui._run_update_worker = run_worker
+    gui._set_update_controls_running = set_update_controls
     gui.__init__ = init
     gui.start_update = start_update
     gui.cancel_update = cancel_update
