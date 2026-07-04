@@ -1,0 +1,140 @@
+name: Build Rotorflight suite packages
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/build-suite-packages.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Package ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Michael
+            repository: mbwallace1390/rotorflight-lua-ethos-suite
+            ref: master
+            asset: michael-rfsuite-master.zip
+          - name: Rob Thomson
+            repository: robthomson/rotorflight-lua-ethos-suite
+            ref: master
+            asset: rob-thomson-rfsuite-master.zip
+          - name: Official
+            repository: rotorflight/rotorflight-lua-ethos-suite
+            ref: master
+            asset: official-rfsuite-master.zip
+
+    steps:
+      - name: Check out suite source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.ref }}
+          path: source
+          fetch-depth: 1
+
+      - name: Build compact verified package
+        shell: bash
+        env:
+          SOURCE_REPOSITORY: ${{ matrix.repository }}
+          SOURCE_REF: ${{ matrix.ref }}
+          ASSET_NAME: ${{ matrix.asset }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile
+
+          source_root = Path("source/src/rfsuite")
+          if not source_root.is_dir():
+              raise SystemExit(f"Missing suite directory: {source_root}")
+
+          commit = subprocess.check_output(
+              ["git", "-C", "source", "rev-parse", "HEAD"], text=True
+          ).strip()
+
+          files = []
+          for path in sorted(p for p in source_root.rglob("*") if p.is_file()):
+              relative = path.relative_to(source_root).as_posix()
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              files.append({
+                  "path": relative,
+                  "size": path.stat().st_size,
+                  "sha256": digest,
+              })
+
+          manifest = {
+              "formatVersion": 1,
+              "packageName": "Rotorflight ETHOS Suite",
+              "sourceRepository": os.environ["SOURCE_REPOSITORY"],
+              "sourceRef": os.environ["SOURCE_REF"],
+              "sourceCommit": commit,
+              "packageDirectory": "rfsuite",
+              "files": files,
+          }
+
+          output_dir = Path("dist")
+          output_dir.mkdir(parents=True, exist_ok=True)
+          output = output_dir / os.environ["ASSET_NAME"]
+          with ZipFile(output, "w", ZIP_DEFLATED, compresslevel=9) as archive:
+              archive.writestr(
+                  "manifest.json",
+                  json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"),
+              )
+              for item in files:
+                  archive.write(
+                      source_root / item["path"],
+                      f"rfsuite/{item['path']}",
+                  )
+
+          print(f"Built {output} ({output.stat().st_size} bytes, {len(files)} files)")
+          PY
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish rolling package release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create or update rolling release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view suite-packages --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create suite-packages \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Rotorflight ETHOS updater packages" \
+              --notes "Rolling compact packages used by the Windows Rotorflight ETHOS Updater."
+          fi
+
+          gh release upload suite-packages dist/*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
