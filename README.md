@@ -2,7 +2,17 @@
 
 Windows updater for the Rotorflight Lua Ethos Suite.
 
-![Rotorflight Radio Updater](https://raw.githubusercontent.com/rotorflight/rotorflight-lua-ethos-suite-updater/master/src/README.png)
+![Rotorflight Radio Updater](https://raw.githubusercontent.com/mbwallace1390/rotorflight-lua-ethos-suite-updater/master/src/README.png)
+
+## Repository
+
+This updater is maintained at:
+
+```
+https://github.com/mbwallace1390/rotorflight-lua-ethos-suite-updater
+```
+
+The updater itself is downloaded from this repository. Rotorflight Lua suite releases installed onto the radio continue to come from the official Rotorflight suite repository.
 
 ## Download
 
@@ -13,7 +23,7 @@ Updater binaries are published on GitHub Releases, **but only when**:
 This means the exact binary link can change or be missing on older releases. Use the Releases page to pick the matching version:
 
 ```
-https://github.com/rotorflight/rotorflight-lua-ethos-suite-updater/releases
+https://github.com/mbwallace1390/rotorflight-lua-ethos-suite-updater/releases
 ```
 
 Asset names (when present):
