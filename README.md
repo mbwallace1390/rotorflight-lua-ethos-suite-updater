@@ -12,7 +12,14 @@ This updater is maintained at:
 https://github.com/mbwallace1390/rotorflight-lua-ethos-suite-updater
 ```
 
-The updater itself is downloaded from this repository. Rotorflight Lua suite releases installed onto the radio continue to come from the official Rotorflight suite repository.
+## Install Sources
+
+The **Suite source** selector offers:
+
+- **Official Rotorflight** — releases, snapshots, and development builds from `rotorflight/rotorflight-lua-ethos-suite`.
+- **Michael Wallace RFSuite Master** — the current pinned `master` commit from `mbwallace1390/rotorflight-lua-ethos-suite`.
+
+Michael's master is installed through the same verified download, translation, audio, staging, validation, and rollback process as the official builds. Its existing `main.lua` version suffix is preserved.
 
 ## Download
 
@@ -45,7 +52,7 @@ Compilation requirements:
 2. Python 3.x on PATH.
 3. PyInstaller installed: `pip install pyinstaller`
 4. From `src`, run: `make.cmd`
-5. Output EXE: `src/update_radio_gui.exe`
+5. Output EXE: `update_radio_gui.exe` in the repository root
 
 Optional build inputs:
 
